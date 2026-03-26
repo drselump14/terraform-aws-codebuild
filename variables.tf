@@ -336,3 +336,16 @@ variable "s3_cache_bucket_name" {
   default     = null
   description = "Use an existing s3 bucket name for cache. Relevant if `cache_type` is set to `S3`."
 }
+
+variable "batch_config" {
+  type = object({
+    combine_artifacts = optional(bool, false)
+    timeout_in_mins   = optional(number, null)
+    restrictions = optional(object({
+      compute_types_allowed  = optional(list(string), [])
+      maximum_builds_allowed = optional(number, null)
+    }), null)
+  })
+  default     = null
+  description = "Configuration for batch builds. When non-null, creates a dedicated IAM service role for batch builds and enables `build_batch_config` on the CodeBuild project."
+}

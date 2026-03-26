@@ -92,6 +92,7 @@ resource "random_string" "bucket_prefix" {
 }
 
 locals {
+  batch_enabled     = module.this.enabled && var.batch_config != null
   cache_bucket_name = "${module.this.id}${var.cache_bucket_suffix_enabled ? "-${join("", random_string.bucket_prefix[*].result)}" : ""}"
 
   ## Clean up the bucket name to use only hyphens, and trim its length to 63 characters.
@@ -128,6 +129,58 @@ locals {
 
   # Final Map Selected from above
   cache = local.cache_options[var.cache_type]
+}
+
+resource "aws_iam_role" "batch" {
+  count              = local.batch_enabled ? 1 : 0
+  name               = "${module.this.id}-batch"
+  assume_role_policy = data.aws_iam_policy_document.batch_role.json
+  path               = var.iam_role_path
+  tags               = module.this.tags
+}
+
+data "aws_iam_policy_document" "batch_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    effect  = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["codebuild.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "batch" {
+  count  = local.batch_enabled ? 1 : 0
+  name   = "${module.this.id}-batch"
+  path   = var.iam_policy_path
+  policy = data.aws_iam_policy_document.batch_permissions.json
+  tags   = module.this.tags
+}
+
+data "aws_iam_policy_document" "batch_permissions" {
+  statement {
+    sid    = ""
+    effect = "Allow"
+
+    actions = [
+      "codebuild:StartBuild",
+      "codebuild:StopBuild",
+      "codebuild:RetryBuild",
+      "codebuild:BatchGetBuilds",
+    ]
+
+    resources = [
+      "arn:aws:codebuild:${local.aws_region}:${local.aws_account_id}:project/${module.this.id}"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "batch" {
+  count      = local.batch_enabled ? 1 : 0
+  policy_arn = join("", aws_iam_policy.batch[*].arn)
+  role       = join("", aws_iam_role.batch[*].id)
 }
 
 resource "aws_iam_role" "default" {
@@ -537,6 +590,23 @@ resource "aws_codebuild_project" "default" {
       mount_options = lookup(file_system_locations.value, "mount_options", null)
       mount_point   = lookup(file_system_locations.value, "mount_point", null)
       type          = lookup(file_system_locations.value, "type", null)
+    }
+  }
+
+  dynamic "build_batch_config" {
+    for_each = local.batch_enabled ? [var.batch_config] : []
+    content {
+      service_role      = join("", aws_iam_role.batch[*].arn)
+      combine_artifacts = build_batch_config.value.combine_artifacts
+      timeout_in_mins   = build_batch_config.value.timeout_in_mins
+
+      dynamic "restrictions" {
+        for_each = build_batch_config.value.restrictions != null ? [build_batch_config.value.restrictions] : []
+        content {
+          compute_types_allowed  = restrictions.value.compute_types_allowed
+          maximum_builds_allowed = restrictions.value.maximum_builds_allowed
+        }
+      }
     }
   }
 }
